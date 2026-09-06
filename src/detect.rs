@@ -84,6 +84,16 @@ fn glob_exists(root: &Path, ext: &str) -> bool {
     })
 }
 
+fn skip_dir(name: &std::ffi::OsStr) -> bool {
+    name == "target"
+        || name == ".git"
+        || name == ".delta"
+        || name == "node_modules"
+        || name == "build"
+        || name == "Pods"
+        || name.to_str().is_some_and(|s| s.ends_with(".app"))
+}
+
 fn walk_cargo_tomls(root: &Path, depth: usize) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     fn rec(dir: &Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
@@ -96,7 +106,7 @@ fn walk_cargo_tomls(root: &Path, depth: usize) -> Vec<std::path::PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name();
-            if name == "target" || name == ".git" || name == "node_modules" {
+            if skip_dir(&name) {
                 continue;
             }
             if path.is_dir() {
@@ -111,11 +121,14 @@ fn walk_cargo_tomls(root: &Path, depth: usize) -> Vec<std::path::PathBuf> {
 }
 
 fn suggest_gpui(root: &Path, team_id: &str) -> Result<Config> {
-    let plist = find_info_plist(root).context("could not find Info.plist for GPUI app")?;
+    let plist = find_info_plist(root)?;
     let meta = read_plist_identity(root, &plist)?;
-    let bin = meta.executable.unwrap_or_else(|| meta.product_name.clone());
+    let bin = meta
+        .executable
+        .clone()
+        .unwrap_or_else(|| meta.product_name.clone());
     let package = infer_package_name(root);
-    let icon = find_icns(root);
+    let icon = find_icns(root)?;
     Ok(Config {
         kind: Kind::Gpui,
         team_id: team_id.to_string(),
@@ -260,7 +273,13 @@ fn read_plist_identity(root: &Path, plist_path: &Path) -> Result<PlistMeta> {
     })
 }
 
-fn find_info_plist(root: &Path) -> Option<std::path::PathBuf> {
+fn find_info_plist(root: &Path) -> Result<std::path::PathBuf> {
+    let mut found = Vec::new();
+    collect_named(root, 5, "Info.plist", &mut found);
+    unique_source(root, "Info.plist", found)
+}
+
+fn find_icns(root: &Path) -> Result<Option<std::path::PathBuf>> {
     let mut found = Vec::new();
     fn rec(dir: &Path, depth: usize, found: &mut Vec<std::path::PathBuf>) {
         if depth == 0 {
@@ -272,29 +291,34 @@ fn find_info_plist(root: &Path) -> Option<std::path::PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name();
-            if name == "target"
-                || name == ".git"
-                || name == "node_modules"
-                || name == "build"
-                || name == "Pods"
-            {
+            if skip_dir(&name) {
                 continue;
             }
             if path.is_dir() {
                 rec(&path, depth - 1, found);
-            } else if name == "Info.plist" {
+            } else if path.extension().and_then(|e| e.to_str()) == Some("icns") {
                 found.push(path);
             }
         }
     }
     rec(root, 5, &mut found);
-    found.into_iter().next()
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(Some(found.remove(0))),
+        _ => bail!(
+            "multiple .icns files: {}. Set [gpui].icon in apple-ship.toml",
+            found
+                .iter()
+                .map(|p| rel(root, p))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
-fn find_icns(root: &Path) -> Option<std::path::PathBuf> {
-    let mut found = None;
-    fn rec(dir: &Path, depth: usize, found: &mut Option<std::path::PathBuf>) {
-        if depth == 0 || found.is_some() {
+fn collect_named(root: &Path, depth: usize, filename: &str, found: &mut Vec<std::path::PathBuf>) {
+    fn rec(dir: &Path, depth: usize, filename: &str, found: &mut Vec<std::path::PathBuf>) {
+        if depth == 0 {
             return;
         }
         let Ok(entries) = fs::read_dir(dir) else {
@@ -303,19 +327,36 @@ fn find_icns(root: &Path) -> Option<std::path::PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name();
-            if name == "target" || name == ".git" {
+            if skip_dir(&name) {
                 continue;
             }
             if path.is_dir() {
-                rec(&path, depth - 1, found);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("icns") {
-                *found = Some(path);
-                return;
+                rec(&path, depth - 1, filename, found);
+            } else if name == filename {
+                found.push(path);
             }
         }
     }
-    rec(root, 5, &mut found);
-    found
+    rec(root, depth, filename, found);
+}
+
+fn unique_source(
+    root: &Path,
+    label: &str,
+    found: Vec<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    match found.as_slice() {
+        [] => bail!("could not find {label}"),
+        [one] => Ok(one.clone()),
+        _ => bail!(
+            "multiple {label} files: {}. Set the path in apple-ship.toml",
+            found
+                .iter()
+                .map(|p| rel(root, p))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 fn infer_package_name(root: &Path) -> Option<String> {
@@ -434,6 +475,41 @@ mod tests {
         let cfg = suggest_gpui(dir.path(), "N59353RP3W").unwrap();
         assert_eq!(cfg.bundle_id, "com.demo.app");
         assert_eq!(cfg.gpui.unwrap().bin, "demo");
+    }
+
+    #[test]
+    fn ignores_delta_worktrees_and_app_bundles() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n\n[dependencies]\ngpui = \"0.2\"\n",
+        )
+        .unwrap();
+        let plist = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.demo.app</string>
+<key>CFBundleName</key><string>demo</string>
+<key>CFBundleExecutable</key><string>demo</string>
+</dict></plist>"#;
+        fs::create_dir_all(dir.path().join("crates/demo")).unwrap();
+        fs::write(dir.path().join("crates/demo/Info.plist"), plist).unwrap();
+        fs::create_dir_all(dir.path().join(".delta/worktrees/x/crates/demo")).unwrap();
+        fs::write(
+            dir.path().join(".delta/worktrees/x/crates/demo/Info.plist"),
+            plist.replace("com.demo.app", "com.wrong.app"),
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("target/release/demo.app/Contents")).unwrap();
+        fs::write(
+            dir.path()
+                .join("target/release/demo.app/Contents/Info.plist"),
+            plist.replace("com.demo.app", "com.bundle.app"),
+        )
+        .unwrap();
+        let cfg = suggest_gpui(dir.path(), "N59353RP3W").unwrap();
+        assert_eq!(cfg.bundle_id, "com.demo.app");
+        assert_eq!(cfg.gpui.unwrap().info_plist, "crates/demo/Info.plist");
     }
 
     #[test]

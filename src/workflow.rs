@@ -60,7 +60,7 @@ const GPUI_STEPS: &str = r#"    steps:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Metal toolchain
-        run: xcodebuild -downloadComponent MetalToolchain || true
+        run: xcodebuild -downloadComponent MetalToolchain
       - name: Install apple-ship
         run: cargo install apple-ship --git https://github.com/meritozh/apple-ship --locked
 "#;

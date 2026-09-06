@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -64,10 +64,7 @@ pub fn run(opts: Options) -> Result<()> {
 
         let password = match stdin_password.as_deref() {
             Some(p) => p.to_string(),
-            None => rpassword::prompt_password(format!(
-                "password for {}: ",
-                cert_path.file_name().unwrap_or_default().to_string_lossy()
-            ))?,
+            None => prompt_p12_password(&cert_path)?,
         };
         let infos = cert::inspect_p12(&cert_path, &password)?;
         for info in &infos {
@@ -169,6 +166,23 @@ fn reject_development(info: &CertInfo) -> Result<()> {
         bail!("unrecognized certificate: {}", info.common_name);
     }
     Ok(())
+}
+
+fn prompt_p12_password(path: &Path) -> Result<String> {
+    if !io::stdin().is_terminal() {
+        bail!(
+            "need a PKCS#12 password for {} but stdin is not a TTY. Re-run in a real terminal, or pass --password-stdin.",
+            path.display()
+        );
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let password = rpassword::prompt_password(format!(
+        "Enter PKCS#12 password for {name} (input hidden): "
+    ))?;
+    if password.is_empty() {
+        bail!("PKCS#12 password for {name} was empty");
+    }
+    Ok(password)
 }
 
 fn read_stdin_password() -> Result<String> {

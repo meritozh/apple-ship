@@ -32,6 +32,10 @@ apple-ship setup --cert ~/Certificates/developer-id.p12
 apple-ship setup --cert ~/Certificates/developer-id.p12 --cert ~/Certificates/distribution.p12 --force
 ```
 
+`setup` prompts on the terminal for each `.p12` password (input is hidden).
+If stdin is not a TTY, it exits; use `--password-stdin` instead. It does not
+guess or reuse passwords.
+
 `setup` will:
 
 1. Read the certificate (type, Team ID, identity)
