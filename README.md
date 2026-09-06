@@ -38,3 +38,17 @@ and push the workflow, then dispatch **macOS Ship** on GitHub (or push a `v*`
 tag for Developer ID).
 
 `apple-ship ci` is the job body. It exits unless `GITHUB_ACTIONS=true`.
+
+## Release
+
+After setup, bump, commit, tag, and push:
+
+```bash
+apple-ship release patch
+apple-ship release minor
+apple-ship release major
+apple-ship release v1.2.3
+```
+
+Developer ID `setup` also stores notarization credentials (Apple ID +
+app-specific password, or `--api-key` / `--api-issuer`).

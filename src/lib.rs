@@ -7,6 +7,8 @@ mod detect;
 mod github;
 mod macos;
 mod policy;
+mod stamp;
+mod version;
 mod workflow;
 
 pub use cli::run;

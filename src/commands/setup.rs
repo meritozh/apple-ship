@@ -19,6 +19,9 @@ pub struct Options {
     pub cert: PathBuf,
     pub kind: Option<Kind>,
     pub password_stdin: bool,
+    pub apple_id: Option<String>,
+    pub api_key: Option<PathBuf>,
+    pub api_issuer: Option<String>,
 }
 
 pub fn run(opts: Options) -> Result<()> {
@@ -54,6 +57,14 @@ pub fn run(opts: Options) -> Result<()> {
     )?;
     println!("secret    {cert_secret}  ({})", info.role.as_str());
 
+    configure_notary(
+        &repo.name_with_owner,
+        opts.channel,
+        opts.apple_id,
+        opts.api_key,
+        opts.api_issuer,
+    )?;
+
     write_config(&root, opts.channel, info, opts.kind)?;
     write_channel_entitlements(&root, opts.channel, &info.team_id)?;
     write_workflow(&root)?;
@@ -64,6 +75,83 @@ pub fn run(opts: Options) -> Result<()> {
     );
     println!("next      commit and push {WORKFLOW_FILE}, then dispatch the macOS Ship workflow on GitHub");
     Ok(())
+}
+
+fn configure_notary(
+    repo: &str,
+    channel: Channel,
+    apple_id: Option<String>,
+    api_key: Option<PathBuf>,
+    api_issuer: Option<String>,
+) -> Result<()> {
+    if channel != Channel::DeveloperId {
+        return Ok(());
+    }
+    let secrets = github::list_secrets(repo)?;
+    let has_apple_id = secrets.iter().any(|s| s == "APPLE_ID")
+        && secrets.iter().any(|s| s == "APPLE_APP_SPECIFIC_PASSWORD");
+    let has_api = ["APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_P8"]
+        .iter()
+        .all(|name| secrets.iter().any(|s| s == *name));
+    if has_apple_id || has_api {
+        println!("notary    already configured");
+        return Ok(());
+    }
+    if let Some(api_key) = api_key {
+        let issuer =
+            api_issuer.ok_or_else(|| anyhow::anyhow!("--api-key requires --api-issuer"))?;
+        let key_id = key_id_from_filename(&api_key)?;
+        let pem = fs::read_to_string(&api_key)?;
+        github::set_secret(repo, "APPLE_API_KEY", &key_id)?;
+        github::set_secret(repo, "APPLE_API_ISSUER", &issuer)?;
+        github::set_secret(repo, "APPLE_API_KEY_P8", pem.trim())?;
+        println!("notary    APPLE_API_KEY ({key_id})");
+        return Ok(());
+    }
+    let email = match apple_id {
+        Some(e) => e,
+        None => prompt_line("Apple ID email: ")?,
+    };
+    if email.is_empty() {
+        anyhow::bail!("Apple ID is required to notarize Developer ID builds");
+    }
+    if !io::stdin().is_terminal() {
+        anyhow::bail!("need an app-specific password but stdin is not a TTY");
+    }
+    let password = rpassword::prompt_password("App-specific password (input hidden): ")?;
+    if password.is_empty() {
+        anyhow::bail!("app-specific password was empty");
+    }
+    github::set_secret(repo, "APPLE_ID", &email)?;
+    github::set_secret(repo, "APPLE_APP_SPECIFIC_PASSWORD", &password)?;
+    println!("notary    APPLE_ID");
+    Ok(())
+}
+
+fn prompt_line(prompt: &str) -> Result<String> {
+    if !io::stdin().is_terminal() {
+        anyhow::bail!("need {prompt}but stdin is not a TTY");
+    }
+    eprint!("{prompt}");
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
+fn key_id_from_filename(path: &Path) -> Result<String> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    if let Some(id) = stem.strip_prefix("AuthKey_") {
+        if !id.is_empty() {
+            return Ok(id.to_string());
+        }
+    }
+    anyhow::bail!(
+        "could not read Key ID from {}. Name it AuthKey_<KEYID>.p8",
+        path.display()
+    );
 }
 
 fn matching_cert(channel: Channel, infos: &[CertInfo]) -> Result<&CertInfo> {

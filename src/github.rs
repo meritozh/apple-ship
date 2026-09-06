@@ -71,6 +71,37 @@ pub fn set_secret(repo: &str, name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn list_secrets(repo: &str) -> Result<Vec<String>> {
+    let output = gh(&[
+        "secret",
+        "list",
+        "--repo",
+        repo,
+        "--env",
+        RELEASE_ENV,
+        "--json",
+        "name",
+    ])?;
+    if !output.status.success() {
+        let output = gh(&["secret", "list", "--repo", repo, "--env", RELEASE_ENV])?;
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        return Ok(text
+            .lines()
+            .filter_map(|line| line.split_whitespace().next().map(|s| s.to_string()))
+            .filter(|s| s != "NAME")
+            .collect());
+    }
+    let v: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Array(vec![]));
+    Ok(v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("name")?.as_str().map(|s| s.to_string()))
+        .collect())
+}
+
 fn gh(args: &[&str]) -> Result<std::process::Output> {
     Command::new("gh")
         .args(args)

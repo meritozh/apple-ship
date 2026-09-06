@@ -16,6 +16,10 @@ pub struct Config {
     pub team_id: String,
     pub bundle_id: String,
     pub product_name: String,
+    #[serde(default = "default_version")]
+    pub version: String,
+    #[serde(default)]
+    pub build: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<Channel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,6 +50,10 @@ pub struct TauriConfig {
 
 fn default_tauri_app_path() -> String {
     "src-tauri".to_string()
+}
+
+fn default_version() -> String {
+    "0.0.0".to_string()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -130,6 +138,8 @@ mod tests {
             team_id: "N59353RP3W".into(),
             bundle_id: "com.daggy.app".into(),
             product_name: "daggy".into(),
+            version: "1.0.1".into(),
+            build: 2,
             channels: vec![Channel::DeveloperId],
             gpui: Some(GpuiConfig {
                 bin: "daggy".into(),

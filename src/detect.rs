@@ -186,6 +186,8 @@ fn suggest_gpui(root: &Path, team_id: &str) -> Result<Config> {
         team_id: team_id.to_string(),
         bundle_id: meta.bundle_id,
         product_name: meta.product_name,
+        version: meta.version,
+        build: meta.build,
         channels: Vec::new(),
         gpui: Some(GpuiConfig {
             bin,
@@ -217,11 +219,18 @@ fn suggest_tauri(root: &Path, team_id: &str) -> Result<Config> {
         .and_then(|x| x.as_str())
         .unwrap_or("App")
         .to_string();
+    let version = v
+        .get("version")
+        .and_then(|x| x.as_str())
+        .unwrap_or("0.0.0")
+        .to_string();
     Ok(Config {
         kind: Kind::Tauri,
         team_id: team_id.to_string(),
         bundle_id,
         product_name,
+        version,
+        build: 0,
         channels: Vec::new(),
         gpui: None,
         tauri: Some(TauriConfig {
@@ -241,6 +250,8 @@ fn suggest_native(root: &Path, team_id: &str) -> Result<Config> {
     let mut scheme = product_name.clone();
     let mut project = None;
     let mut workspace = None;
+    let mut version = "0.0.0".to_string();
+    let mut build = 0u64;
 
     let yml = root.join("project.yml");
     if yml.is_file() {
@@ -254,6 +265,14 @@ fn suggest_native(root: &Path, team_id: &str) -> Result<Config> {
         }
         if let Some(id) = find_line_value(&text, "PRODUCT_BUNDLE_IDENTIFIER:") {
             bundle_id = id.trim_matches('"').to_string();
+        }
+        if let Some(v) = find_line_value(&text, "MARKETING_VERSION:") {
+            version = v.trim_matches('"').to_string();
+        }
+        if let Some(b) = find_line_value(&text, "CURRENT_PROJECT_VERSION:") {
+            if let Ok(n) = b.trim_matches('"').parse::<u64>() {
+                build = n;
+            }
         }
     }
 
@@ -282,6 +301,8 @@ fn suggest_native(root: &Path, team_id: &str) -> Result<Config> {
         team_id: team_id.to_string(),
         bundle_id,
         product_name,
+        version,
+        build,
         channels: Vec::new(),
         gpui: None,
         tauri: None,
@@ -297,6 +318,8 @@ struct PlistMeta {
     bundle_id: String,
     product_name: String,
     executable: Option<String>,
+    version: String,
+    build: u64,
 }
 
 fn read_plist_identity(root: &Path, plist_path: &Path) -> Result<PlistMeta> {
@@ -320,11 +343,23 @@ fn read_plist_identity(root: &Path, plist_path: &Path) -> Result<PlistMeta> {
         .get("CFBundleExecutable")
         .and_then(|v| v.as_string())
         .map(|s| s.to_string());
+    let version = dict
+        .get("CFBundleShortVersionString")
+        .and_then(|v| v.as_string())
+        .unwrap_or("0.0.0")
+        .to_string();
+    let build = dict
+        .get("CFBundleVersion")
+        .and_then(|v| v.as_string())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
     let _ = root;
     Ok(PlistMeta {
         bundle_id,
         product_name,
         executable,
+        version,
+        build,
     })
 }
 
