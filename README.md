@@ -28,6 +28,10 @@ apple-ship setup --channel app-store --cert ~/Documents/certs/distribution.p12
 A file that does not contain that certificate is an error. Passwords are
 prompted on a TTY (hidden). Non-TTY: `--password-stdin`.
 
+`setup` writes or updates `apple-ship.toml` in this repo. Kind is auto-detected
+when the file is missing. Pass `--kind gpui|tauri|native` to skip detection
+or to change kind on a later run.
+
 `setup` writes `apple-ship.toml` and `.github/workflows/macos-ship.yml` for
 this repo, and stores the cert in the GitHub Environment `release`. Commit
 and push the workflow, then dispatch **macOS Ship** on GitHub (or push a `v*`

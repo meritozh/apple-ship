@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 
 use crate::config::{Config, GpuiConfig, NativeConfig, TauriConfig};
-use crate::policy::Kind;
+use crate::policy::{Channel, Kind};
 
 pub fn detect_kind(root: &Path) -> Result<Kind> {
     let mut kinds = Vec::new();
@@ -20,11 +20,11 @@ pub fn detect_kind(root: &Path) -> Result<Kind> {
     match kinds.as_slice() {
         [kind] => Ok(*kind),
         [] => bail!(
-            "could not detect app kind in {}. Expected src-tauri/tauri.conf.json (tauri), an Xcode project (native), or a Cargo.toml that depends on gpui.",
+            "could not detect app kind in {}. Pass --kind gpui|tauri|native.",
             root.display()
         ),
         many => bail!(
-            "ambiguous app kind in {}: {}. Set kind in apple-ship.toml.",
+            "ambiguous app kind in {}: {}. Pass --kind gpui|tauri|native.",
             root.display(),
             many.iter()
                 .map(|k| k.as_str())
@@ -40,6 +40,58 @@ pub fn suggest_config(root: &Path, kind: Kind, team_id: &str) -> Result<Config> 
         Kind::Tauri => suggest_tauri(root, team_id),
         Kind::Native => suggest_native(root, team_id),
     }
+}
+
+pub fn prepare_for_setup(
+    root: &Path,
+    existing: Option<Config>,
+    kind_override: Option<Kind>,
+    channel: Channel,
+    team_id: &str,
+) -> Result<Config> {
+    let mut cfg = match (existing, kind_override) {
+        (None, kind) => {
+            let kind = match kind {
+                Some(k) => k,
+                None => detect_kind(root)?,
+            };
+            suggest_config(root, kind, team_id)?
+        }
+        (Some(cfg), None) => {
+            if cfg.team_id != team_id {
+                bail!(
+                    "apple-ship.toml team_id is {} but this certificate is team {}",
+                    cfg.team_id,
+                    team_id
+                );
+            }
+            cfg
+        }
+        (Some(cfg), Some(kind)) => {
+            if cfg.team_id != team_id {
+                bail!(
+                    "apple-ship.toml team_id is {} but this certificate is team {}",
+                    cfg.team_id,
+                    team_id
+                );
+            }
+            if cfg.kind == kind {
+                cfg
+            } else {
+                let mut generated = suggest_config(root, kind, team_id)?;
+                generated.channels = cfg.channels;
+                generated
+            }
+        }
+    };
+    if !cfg.channels.contains(&channel) {
+        cfg.channels.push(channel);
+        cfg.channels.sort_by_key(|c| match c {
+            Channel::DeveloperId => 0,
+            Channel::AppStore => 1,
+        });
+    }
+    Ok(cfg)
 }
 
 fn has_tauri(root: &Path) -> bool {
@@ -527,5 +579,84 @@ mod tests {
         let cfg = suggest_native(dir.path(), "N59353RP3W").unwrap();
         assert_eq!(cfg.product_name, "Sotto");
         assert!(cfg.bundle_id.contains("sotto"));
+    }
+
+    fn tauri_fixture() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src-tauri")).unwrap();
+        fs::write(
+            dir.path().join("src-tauri/tauri.conf.json"),
+            r#"{"productName":"Climber","identifier":"com.gaowanqiu.climber"}"#,
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn setup_generates_toml_from_detect() {
+        let dir = tauri_fixture();
+        let cfg =
+            prepare_for_setup(dir.path(), None, None, Channel::DeveloperId, "N59353RP3W").unwrap();
+        assert_eq!(cfg.kind, Kind::Tauri);
+        assert_eq!(cfg.bundle_id, "com.gaowanqiu.climber");
+        assert_eq!(cfg.channels, vec![Channel::DeveloperId]);
+    }
+
+    #[test]
+    fn setup_updates_existing_channels() {
+        let dir = tauri_fixture();
+        let first =
+            prepare_for_setup(dir.path(), None, None, Channel::DeveloperId, "N59353RP3W").unwrap();
+        let second = prepare_for_setup(
+            dir.path(),
+            Some(first),
+            None,
+            Channel::AppStore,
+            "N59353RP3W",
+        )
+        .unwrap();
+        assert_eq!(second.kind, Kind::Tauri);
+        assert_eq!(
+            second.channels,
+            vec![Channel::DeveloperId, Channel::AppStore]
+        );
+    }
+
+    #[test]
+    fn setup_kind_override_skips_detect() {
+        let dir = tauri_fixture();
+        fs::write(
+            dir.path().join("project.yml"),
+            "name: Sotto\noptions:\n  bundleIdPrefix: com.meritozh\n",
+        )
+        .unwrap();
+        let err = detect_kind(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("ambiguous"));
+        let cfg = prepare_for_setup(
+            dir.path(),
+            None,
+            Some(Kind::Tauri),
+            Channel::DeveloperId,
+            "N59353RP3W",
+        )
+        .unwrap();
+        assert_eq!(cfg.kind, Kind::Tauri);
+        assert_eq!(cfg.product_name, "Climber");
+    }
+
+    #[test]
+    fn setup_rejects_team_mismatch_on_update() {
+        let dir = tauri_fixture();
+        let first =
+            prepare_for_setup(dir.path(), None, None, Channel::DeveloperId, "N59353RP3W").unwrap();
+        let err = prepare_for_setup(
+            dir.path(),
+            Some(first),
+            None,
+            Channel::DeveloperId,
+            "AAAAAAAAAA",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("team"));
     }
 }

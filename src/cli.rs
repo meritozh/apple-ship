@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::commands::{ci, setup};
-use crate::policy::Channel;
+use crate::policy::{Channel, Kind};
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
@@ -12,10 +12,12 @@ pub fn run() -> Result<()> {
         Commands::Setup {
             channel,
             cert,
+            kind,
             password_stdin,
         } => setup::run(setup::Options {
             channel,
             cert,
+            kind,
             password_stdin,
         }),
         Commands::Ci { channel } => ci::run(channel),
@@ -43,6 +45,9 @@ enum Commands {
         /// PKCS#12 file for this channel (Developer ID Application or Apple Distribution)
         #[arg(long)]
         cert: PathBuf,
+        /// Skip auto-detect and generate apple-ship.toml for this kind
+        #[arg(long, value_enum)]
+        kind: Option<Kind>,
         /// Read the PKCS#12 password from stdin instead of prompting
         #[arg(long)]
         password_stdin: bool,

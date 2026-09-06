@@ -26,11 +26,16 @@ impl std::fmt::Display for Channel {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
+    #[value(name = "gpui")]
     Gpui,
+    #[value(name = "tauri")]
     Tauri,
+    #[value(name = "native")]
     Native,
 }
 

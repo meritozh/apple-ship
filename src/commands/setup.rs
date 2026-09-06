@@ -11,12 +11,13 @@ use crate::config::{self, CONFIG_FILE, WORKFLOW_FILE};
 use crate::detect;
 use crate::github;
 use crate::macos;
-use crate::policy::{self, Channel};
+use crate::policy::{self, Channel, Kind};
 use crate::workflow;
 
 pub struct Options {
     pub channel: Channel,
     pub cert: PathBuf,
+    pub kind: Option<Kind>,
     pub password_stdin: bool,
 }
 
@@ -68,7 +69,7 @@ pub fn run(opts: Options) -> Result<()> {
     )?;
     println!("secret    {cert_secret}  ({})", info.role.as_str());
 
-    write_config(&root, opts.channel, info)?;
+    write_config(&root, opts.channel, info, opts.kind)?;
     write_channel_entitlements(&root, opts.channel, &info.team_id)?;
     write_workflow(&root)?;
 
@@ -131,32 +132,19 @@ fn read_stdin_password() -> Result<String> {
     Ok(password)
 }
 
-fn write_config(root: &Path, channel: Channel, info: &CertInfo) -> Result<()> {
+fn write_config(root: &Path, channel: Channel, info: &CertInfo, kind: Option<Kind>) -> Result<()> {
     let path = root.join(CONFIG_FILE);
-    let mut cfg = if path.exists() {
-        let located = config::load(root)?;
-        if located.config.team_id != info.team_id {
-            bail!(
-                "{CONFIG_FILE} team_id is {} but this certificate is team {}. Refusing to mix teams.",
-                located.config.team_id,
-                info.team_id
-            );
-        }
-        located.config
+    let had_file = path.exists();
+    let existing = if had_file {
+        Some(config::load(root)?.config)
     } else {
-        let kind = detect::detect_kind(root)?;
-        detect::suggest_config(root, kind, &info.team_id)?
+        None
     };
-    if !cfg.channels.contains(&channel) {
-        cfg.channels.push(channel);
-        cfg.channels.sort_by_key(|c| match c {
-            Channel::DeveloperId => 0,
-            Channel::AppStore => 1,
-        });
-    }
+    let cfg = detect::prepare_for_setup(root, existing, kind, channel, &info.team_id)?;
     config::save(root, &cfg)?;
     println!(
-        "config    {CONFIG_FILE}  kind={}  channels={}",
+        "config    {} {CONFIG_FILE}  kind={}  channels={}",
+        if had_file { "updated" } else { "wrote" },
         cfg.kind,
         cfg.channels
             .iter()
