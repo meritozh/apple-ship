@@ -1,6 +1,9 @@
 use crate::cert::CertRole;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
 pub enum Channel {
     #[value(name = "developer-id")]
     DeveloperId,
@@ -69,29 +72,6 @@ pub fn secrets_for_role(role: CertRole) -> Option<(&'static str, &'static str)> 
     }
 }
 
-pub fn required_signing_secrets(channel: Channel) -> &'static [&'static str] {
-    match channel {
-        Channel::DeveloperId => &[
-            "APPLE_CERTIFICATE",
-            "APPLE_CERTIFICATE_PASSWORD",
-            "APPLE_TEAM_ID",
-        ],
-        Channel::AppStore => &[
-            "APPLE_CERTIFICATE_APP_STORE",
-            "APPLE_CERTIFICATE_APP_STORE_PASSWORD",
-            "APPLE_TEAM_ID",
-        ],
-    }
-}
-
-/// Either Apple ID + app-specific password, or an App Store Connect API key.
-pub fn notary_secret_groups() -> &'static [&'static [&'static str]] {
-    &[
-        &["APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD"],
-        &["APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_P8"],
-    ]
-}
-
 pub fn ci_supports(channel: Channel) -> bool {
     matches!(channel, Channel::DeveloperId)
 }
@@ -103,13 +83,25 @@ pub fn application_role(channel: Channel) -> CertRole {
     }
 }
 
+/// The single signing cert in `infos` that this channel requires.
+pub fn cert_matching_channel(
+    channel: Channel,
+    infos: &[crate::cert::CertInfo],
+) -> Option<&crate::cert::CertInfo> {
+    let want = application_role(channel);
+    let mut matched = infos.iter().filter(|info| info.role == want);
+    match (matched.next(), matched.next()) {
+        (Some(one), None) => Some(one),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn developer_id_secrets() {
-        assert!(required_signing_secrets(Channel::DeveloperId).contains(&"APPLE_CERTIFICATE"));
         assert_eq!(
             secrets_for_role(CertRole::DeveloperIdApplication),
             Some(("APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD"))
@@ -122,8 +114,12 @@ mod tests {
             application_role(Channel::AppStore),
             CertRole::AppleDistribution
         );
-        assert!(
-            required_signing_secrets(Channel::AppStore).contains(&"APPLE_CERTIFICATE_APP_STORE")
+        assert_eq!(
+            secrets_for_role(CertRole::AppleDistribution),
+            Some((
+                "APPLE_CERTIFICATE_APP_STORE",
+                "APPLE_CERTIFICATE_APP_STORE_PASSWORD"
+            ))
         );
     }
 
@@ -136,5 +132,37 @@ mod tests {
     fn ci_does_not_ship_app_store_yet() {
         assert!(ci_supports(Channel::DeveloperId));
         assert!(!ci_supports(Channel::AppStore));
+    }
+
+    #[test]
+    fn matching_cert_is_channel_specific() {
+        use crate::cert::{CertInfo, CertRole};
+        let did = CertInfo {
+            role: CertRole::DeveloperIdApplication,
+            team_id: "N59353RP3W".into(),
+            identity: "Developer ID Application: wanqiu gao (N59353RP3W)".into(),
+            common_name: "Developer ID Application: wanqiu gao (N59353RP3W)".into(),
+        };
+        let dist = CertInfo {
+            role: CertRole::AppleDistribution,
+            team_id: "N59353RP3W".into(),
+            identity: "Apple Distribution: wanqiu gao (N59353RP3W)".into(),
+            common_name: "Apple Distribution: wanqiu gao (N59353RP3W)".into(),
+        };
+        let both = [did.clone(), dist.clone()];
+        assert_eq!(
+            cert_matching_channel(Channel::DeveloperId, &both)
+                .unwrap()
+                .role,
+            CertRole::DeveloperIdApplication
+        );
+        assert_eq!(
+            cert_matching_channel(Channel::AppStore, &both)
+                .unwrap()
+                .role,
+            CertRole::AppleDistribution
+        );
+        assert!(cert_matching_channel(Channel::AppStore, &[did]).is_none());
+        assert!(cert_matching_channel(Channel::DeveloperId, &[dist]).is_none());
     }
 }

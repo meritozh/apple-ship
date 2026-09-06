@@ -293,6 +293,7 @@ mod tests {
             team_id: "N59353RP3W".into(),
             bundle_id: "com.demo.app".into(),
             product_name: "demo".into(),
+            channels: Vec::new(),
             gpui: Some(GpuiConfig {
                 bin: "demo".into(),
                 package: None,

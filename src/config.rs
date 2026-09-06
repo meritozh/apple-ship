@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::policy::Kind;
+use crate::policy::{Channel, Kind};
 
 pub const CONFIG_FILE: &str = "apple-ship.toml";
 pub const WORKFLOW_FILE: &str = ".github/workflows/macos-ship.yml";
@@ -16,6 +16,8 @@ pub struct Config {
     pub team_id: String,
     pub bundle_id: String,
     pub product_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<Channel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpui: Option<GpuiConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -58,7 +60,6 @@ pub struct NativeConfig {
 #[derive(Clone, Debug)]
 pub struct LocatedConfig {
     pub root: PathBuf,
-    pub path: PathBuf,
     pub config: Config,
 }
 
@@ -85,7 +86,7 @@ pub fn load(start: &Path) -> Result<LocatedConfig> {
         .with_context(|| format!("missing {CONFIG_FILE} at {}", path.display()))?;
     let config: Config = toml::from_str(&text)
         .with_context(|| format!("invalid {CONFIG_FILE} at {}", path.display()))?;
-    Ok(LocatedConfig { root, path, config })
+    Ok(LocatedConfig { root, config })
 }
 
 pub fn save(root: &Path, config: &Config) -> Result<PathBuf> {
@@ -129,6 +130,7 @@ mod tests {
             team_id: "N59353RP3W".into(),
             bundle_id: "com.daggy.app".into(),
             product_name: "daggy".into(),
+            channels: vec![Channel::DeveloperId],
             gpui: Some(GpuiConfig {
                 bin: "daggy".into(),
                 package: Some("daggy-app".into()),
@@ -143,6 +145,7 @@ mod tests {
         let back: Config = toml::from_str(&text).unwrap();
         assert_eq!(back.kind, Kind::Gpui);
         assert_eq!(back.team_id, "N59353RP3W");
+        assert_eq!(back.channels, vec![Channel::DeveloperId]);
         assert_eq!(back.gpui.unwrap().bin, "daggy");
     }
 }

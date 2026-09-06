@@ -134,6 +134,7 @@ fn suggest_gpui(root: &Path, team_id: &str) -> Result<Config> {
         team_id: team_id.to_string(),
         bundle_id: meta.bundle_id,
         product_name: meta.product_name,
+        channels: Vec::new(),
         gpui: Some(GpuiConfig {
             bin,
             package,
@@ -169,6 +170,7 @@ fn suggest_tauri(root: &Path, team_id: &str) -> Result<Config> {
         team_id: team_id.to_string(),
         bundle_id,
         product_name,
+        channels: Vec::new(),
         gpui: None,
         tauri: Some(TauriConfig {
             app_path: "src-tauri".into(),
@@ -228,6 +230,7 @@ fn suggest_native(root: &Path, team_id: &str) -> Result<Config> {
         team_id: team_id.to_string(),
         bundle_id,
         product_name,
+        channels: Vec::new(),
         gpui: None,
         tauri: None,
         native: Some(NativeConfig {

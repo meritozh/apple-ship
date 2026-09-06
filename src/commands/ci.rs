@@ -9,13 +9,18 @@ use crate::policy::{self, Channel};
 
 pub fn run(channel: Channel) -> Result<()> {
     macos::require_github_actions()?;
+    let cwd = env::current_dir()?;
+    let located = config::load(&cwd)?;
+    if !located.config.channels.contains(&channel) {
+        anyhow::bail!(
+            "{channel} is not configured in apple-ship.toml. Run `apple-ship setup --channel {channel} --cert <p12>` in this repo."
+        );
+    }
     if !policy::ci_supports(channel) {
         bail!(
             "this apple-ship build ships {channel} artifacts in a later phase. Developer ID is implemented; App Store pkg export is not."
         );
     }
-    let cwd = env::current_dir()?;
-    let located = config::load(&cwd)?;
     let config = located.config;
 
     let role = policy::application_role(channel);

@@ -203,18 +203,6 @@ pub fn inspect_p12(path: &Path, password: &str) -> Result<Vec<CertInfo>> {
     Ok(infos)
 }
 
-pub fn inspect_x509(path: &Path) -> Result<CertInfo> {
-    let subject = openssl_subject_from_file(path)?;
-    let info = classify_subject(&subject)?;
-    if is_intermediate_cn(&info.common_name) {
-        bail!(
-            "{} looks like an Apple intermediate, not a signing certificate",
-            path.display()
-        );
-    }
-    Ok(info)
-}
-
 fn openssl_pkcs12_certs(path: &Path, password: &str) -> Result<String> {
     let output = Command::new("openssl")
         .args([
@@ -284,29 +272,6 @@ fn openssl_subject_from_pem(pem: &str) -> Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn openssl_subject_from_file(path: &Path) -> Result<String> {
-    for inform in ["PEM", "DER"] {
-        let output = Command::new("openssl")
-            .args([
-                "x509",
-                "-noout",
-                "-subject",
-                "-nameopt",
-                "RFC2253",
-                "-inform",
-                inform,
-                "-in",
-                &path.to_string_lossy(),
-            ])
-            .output()
-            .context("failed to run openssl x509")?;
-        if output.status.success() {
-            return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
-        }
-    }
-    bail!("could not parse {} as PEM or DER X.509", path.display());
 }
 
 #[cfg(test)]
