@@ -42,7 +42,7 @@ enum Commands {
         /// developer-id (direct distribution) or app-store
         #[arg(long, value_enum)]
         channel: Channel,
-        /// PKCS#12 file for this channel (Developer ID Application or Apple Distribution)
+        /// PKCS#12 file, or a folder of .cer/.p12 files (channel selects the matching cert)
         #[arg(long)]
         cert: PathBuf,
         /// Skip auto-detect and generate apple-ship.toml for this kind

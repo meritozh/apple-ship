@@ -14,11 +14,11 @@ cargo install apple-ship --git https://github.com/meritozh/apple-ship --locked
 From the app repo:
 
 ```bash
-apple-ship setup --channel developer-id --cert ~/Documents/certs/developerID_application.p12
-apple-ship setup --channel app-store --cert ~/Documents/certs/distribution.p12
+apple-ship setup --channel developer-id --cert ~/Documents/certs
+apple-ship setup --channel app-store --cert ~/Documents/certs
 ```
 
-`--channel` selects the certificate that must be in `--cert`:
+`--cert` may be a `.p12` or a folder. A folder is scanned for `.cer`/`.crt`/`.pem` whose subject matches the channel; the sibling `.p12` is used. `--channel` selects which certificate is required:
 
 | Channel | Required certificate | Result |
 |---|---|---|

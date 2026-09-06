@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use base64::Engine;
 
 use crate::cert::{self, CertInfo};
@@ -27,23 +27,8 @@ pub fn run(opts: Options) -> Result<()> {
     let cwd = env::current_dir()?;
     let root = config::find_root(&cwd)?;
 
-    let cert_path = opts
-        .cert
-        .canonicalize()
-        .with_context(|| format!("certificate not found: {}", opts.cert.display()))?;
-    let ext = cert_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if ext != "p12" && ext != "pfx" {
-        bail!(
-            "--cert must be a PKCS#12 file (.p12), got {}. {} needs a {} certificate with its private key.",
-            cert_path.display(),
-            opts.channel,
-            policy::application_role(opts.channel).as_str()
-        );
-    }
+    let cert_path = cert::resolve_p12(&opts.cert, policy::application_role(opts.channel))?;
+    println!("using     {}", cert_path.display());
 
     let password = if opts.password_stdin {
         read_stdin_password()?

@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -203,6 +204,122 @@ pub fn inspect_p12(path: &Path, password: &str) -> Result<Vec<CertInfo>> {
     Ok(infos)
 }
 
+fn openssl_subject_from_file(path: &Path) -> Result<String> {
+    for inform in ["PEM", "DER"] {
+        let output = Command::new("openssl")
+            .args([
+                "x509",
+                "-noout",
+                "-subject",
+                "-nameopt",
+                "RFC2253",
+                "-inform",
+                inform,
+                "-in",
+                &path.to_string_lossy(),
+            ])
+            .output()
+            .context("failed to run openssl x509")?;
+        if output.status.success() {
+            return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+        }
+    }
+    bail!("could not parse {} as PEM or DER X.509", path.display());
+}
+
+/// If `path` is a .p12, return it. If it is a directory, pick the unique .p12
+/// whose sibling .cer/.crt/.pem matches `want`. Does not open PKCS#12 files
+/// (those need a password).
+pub fn resolve_p12(path: &Path, want: CertRole) -> Result<PathBuf> {
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("certificate path not found: {}", path.display()))?;
+    if path.is_file() {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext == "p12" || ext == "pfx" {
+            return Ok(path);
+        }
+        bail!(
+            "{} is not a PKCS#12 file. Pass a .p12 or a folder of certificates.",
+            path.display()
+        );
+    }
+    if !path.is_dir() {
+        bail!("{} is not a file or directory", path.display());
+    }
+
+    let mut matches: Vec<PathBuf> = Vec::new();
+    let mut inspected = Vec::new();
+    for entry in fs::read_dir(&path).with_context(|| format!("read {}", path.display()))? {
+        let entry = entry?;
+        let file = entry.path();
+        if !file.is_file() {
+            continue;
+        }
+        let ext = file
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(ext.as_str(), "cer" | "crt" | "der" | "pem") {
+            continue;
+        }
+        inspected.push(file.file_name().unwrap().to_string_lossy().into_owned());
+        let subject = openssl_subject_from_file(&file)?;
+        let info = match classify_subject(&subject) {
+            Ok(info) => info,
+            Err(_) => continue,
+        };
+        if is_intermediate_cn(&info.common_name) || info.role != want {
+            continue;
+        }
+        let stem = file.file_stem().context("certificate file name")?;
+        let p12 = ["p12", "pfx"]
+            .iter()
+            .map(|ext| {
+                let mut p = file.with_file_name(stem);
+                p.set_extension(ext);
+                p
+            })
+            .find(|p| p.is_file());
+        let Some(p12) = p12 else {
+            bail!(
+                "found {} in {} but there is no sibling .p12 with the private key",
+                file.file_name().unwrap_or_default().to_string_lossy(),
+                path.display()
+            );
+        };
+        matches.push(p12);
+    }
+
+    match matches.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => bail!(
+            "no {} certificate in {}. Inspected: {}",
+            want.as_str(),
+            path.display(),
+            if inspected.is_empty() {
+                "(no .cer/.crt/.pem files)".to_string()
+            } else {
+                inspected.join(", ")
+            }
+        ),
+        many => bail!(
+            "multiple {} certificates in {}: {}",
+            want.as_str(),
+            path.display(),
+            many.iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 fn openssl_pkcs12_certs(path: &Path, password: &str) -> Result<String> {
     let output = Command::new("openssl")
         .args([
@@ -328,5 +445,89 @@ mod tests {
         let info = classify_subject(s).unwrap();
         assert_eq!(info.role, CertRole::Unknown);
         assert!(is_intermediate_cn(&info.common_name));
+    }
+
+    fn write_cer(dir: &std::path::Path, stem: &str, cn: &str) {
+        let key = dir.join(format!("{stem}.key"));
+        let cer = dir.join(format!("{stem}.cer"));
+        let status = Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                &key.to_string_lossy(),
+                "-out",
+                &cer.to_string_lossy(),
+                "-days",
+                "1",
+                "-subj",
+                &format!("/CN={cn}/OU=N59353RP3W/O=Test/C=US"),
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::write(dir.join(format!("{stem}.p12")), b"placeholder").unwrap();
+    }
+
+    #[test]
+    fn resolve_p12_file_passthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let p12 = dir.path().join("one.p12");
+        std::fs::write(&p12, b"placeholder").unwrap();
+        let got = resolve_p12(&p12, CertRole::DeveloperIdApplication).unwrap();
+        assert_eq!(got, p12.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_p12_picks_cer_matching_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        write_cer(
+            dir.path(),
+            "developerID_application",
+            "Developer ID Application: Test (N59353RP3W)",
+        );
+        write_cer(
+            dir.path(),
+            "distribution",
+            "Apple Distribution: Test (N59353RP3W)",
+        );
+        let did = resolve_p12(dir.path(), CertRole::DeveloperIdApplication).unwrap();
+        assert_eq!(
+            did.file_name().unwrap().to_str().unwrap(),
+            "developerID_application.p12"
+        );
+        let dist = resolve_p12(dir.path(), CertRole::AppleDistribution).unwrap();
+        assert_eq!(
+            dist.file_name().unwrap().to_str().unwrap(),
+            "distribution.p12"
+        );
+    }
+
+    #[test]
+    fn resolve_p12_errors_without_matching_cer() {
+        let dir = tempfile::tempdir().unwrap();
+        write_cer(
+            dir.path(),
+            "distribution",
+            "Apple Distribution: Test (N59353RP3W)",
+        );
+        let err = resolve_p12(dir.path(), CertRole::DeveloperIdApplication).unwrap_err();
+        assert!(err.to_string().contains("Developer ID Application"));
+    }
+
+    #[test]
+    fn resolve_p12_errors_when_cer_has_no_sibling_p12() {
+        let dir = tempfile::tempdir().unwrap();
+        write_cer(
+            dir.path(),
+            "developerID_application",
+            "Developer ID Application: Test (N59353RP3W)",
+        );
+        std::fs::remove_file(dir.path().join("developerID_application.p12")).unwrap();
+        let err = resolve_p12(dir.path(), CertRole::DeveloperIdApplication).unwrap_err();
+        assert!(err.to_string().contains("sibling .p12"));
     }
 }
