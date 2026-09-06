@@ -320,17 +320,40 @@ pub fn resolve_p12(path: &Path, want: CertRole) -> Result<PathBuf> {
     }
 }
 
-fn openssl_pkcs12_certs(path: &Path, password: &str) -> Result<String> {
+fn openssl_pkcs12_needs_legacy(version_line: &str) -> bool {
+    let line = version_line.trim();
+    let Some(rest) = line.strip_prefix("OpenSSL ") else {
+        return false;
+    };
+    rest.split('.')
+        .next()
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 3)
+}
+
+fn openssl_version_line() -> Result<String> {
     let output = Command::new("openssl")
-        .args([
-            "pkcs12",
-            "-in",
-            &path.to_string_lossy(),
-            "-nokeys",
-            "-clcerts",
-            "-passin",
-            "env:APPLE_SHIP_P12_PASS",
-        ])
+        .arg("version")
+        .output()
+        .context("failed to run openssl version")?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn openssl_pkcs12_certs(path: &Path, password: &str) -> Result<String> {
+    let mut args = vec![
+        "pkcs12".to_string(),
+        "-in".to_string(),
+        path.to_string_lossy().into_owned(),
+        "-nokeys".to_string(),
+        "-clcerts".to_string(),
+        "-passin".to_string(),
+        "env:APPLE_SHIP_P12_PASS".to_string(),
+    ];
+    if openssl_pkcs12_needs_legacy(&openssl_version_line()?) {
+        args.push("-legacy".to_string());
+    }
+    let output = Command::new("openssl")
+        .args(&args)
         .env("APPLE_SHIP_P12_PASS", password)
         .output()
         .context("failed to run openssl pkcs12")?;
@@ -409,6 +432,14 @@ mod tests {
     }
 
     #[test]
+    fn classify_developer_id_with_uid() {
+        let s = "C=US,O=wanqiu gao,OU=N59353RP3W,CN=Developer ID Application: wanqiu gao (N59353RP3W),UID=N59353RP3W";
+        let info = classify_subject(s).unwrap();
+        assert_eq!(info.role, CertRole::DeveloperIdApplication);
+        assert_eq!(info.team_id, "N59353RP3W");
+    }
+
+    #[test]
     fn classify_distribution_slash_form() {
         let s = "subject=/CN=Apple Distribution: wanqiu gao (N59353RP3W)/OU=N59353RP3W/O=wanqiu gao/C=US";
         let info = classify_subject(s).unwrap();
@@ -437,6 +468,15 @@ mod tests {
         let s = "CN=3rd Party Mac Developer Installer: wanqiu gao (N59353RP3W),OU=N59353RP3W,O=wanqiu gao,C=US";
         let info = classify_subject(s).unwrap();
         assert_eq!(info.role, CertRole::MacInstallerDistribution);
+    }
+
+    #[test]
+    fn openssl3_needs_legacy_libressl_does_not() {
+        assert!(openssl_pkcs12_needs_legacy(
+            "OpenSSL 3.6.4 25 Aug 2026 (Library: OpenSSL 3.6.4 25 Aug 2026)"
+        ));
+        assert!(!openssl_pkcs12_needs_legacy("LibreSSL 3.3.6"));
+        assert!(!openssl_pkcs12_needs_legacy("OpenSSL 1.1.1w  11 Sep 2023"));
     }
 
     #[test]
