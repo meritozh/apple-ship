@@ -16,9 +16,6 @@ pub fn run(spec: &str) -> Result<()> {
     hydrate_version(&located.root, &mut located.config)?;
     let current = SemVer::parse(&located.config.version)?;
     let next = current.bump(version::parse_spec(spec)?)?;
-    if located.config.build == 0 {
-        bail!("apple-ship.toml build is 0; cannot increment CFBundleVersion");
-    }
     located.config.version = next.to_string();
     located.config.build += 1;
 
@@ -55,11 +52,21 @@ fn hydrate_version(root: &std::path::Path, cfg: &mut crate::config::Config) -> R
                 cfg.build = build;
             }
         }
-        Kind::Tauri | Kind::Native => {
+        Kind::Tauri => {
+            let tauri = cfg.tauri()?;
             if cfg.version == "0.0.0" {
-                bail!(
-                    "apple-ship.toml has no version; re-run `apple-ship setup` or set version/build"
-                );
+                cfg.version = stamp::read_tauri_version(root, &tauri.app_path)?;
+            }
+        }
+        Kind::Native => {
+            if cfg.version == "0.0.0" || cfg.build == 0 {
+                let (version, build) = stamp::read_project_yml_versions(&root.join("project.yml"))?;
+                if cfg.version == "0.0.0" {
+                    cfg.version = version;
+                }
+                if cfg.build == 0 {
+                    cfg.build = build;
+                }
             }
         }
     }

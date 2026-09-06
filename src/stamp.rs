@@ -177,6 +177,47 @@ fn set_yaml_scalar(text: &str, key: &str, value: &str) -> Result<String> {
     Ok(out)
 }
 
+pub fn read_tauri_version(root: &Path, app_path: &str) -> Result<String> {
+    for name in ["tauri.conf.json", "tauri.conf.json5"] {
+        let path = root.join(app_path).join(name);
+        if path.is_file() {
+            let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)
+                .with_context(|| format!("invalid JSON {}", path.display()))?;
+            return v
+                .get("version")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+                .with_context(|| format!("{} missing version", path.display()));
+        }
+    }
+    bail!("missing tauri.conf.json under {app_path}")
+}
+
+pub fn read_project_yml_versions(path: &Path) -> Result<(String, u64)> {
+    let text = fs::read_to_string(path).with_context(|| format!("missing {}", path.display()))?;
+    let version =
+        yaml_value(&text, "MARKETING_VERSION").context("project.yml missing MARKETING_VERSION")?;
+    let build = yaml_value(&text, "CURRENT_PROJECT_VERSION")
+        .context("project.yml missing CURRENT_PROJECT_VERSION")?
+        .parse::<u64>()
+        .context("CURRENT_PROJECT_VERSION is not an integer")?;
+    Ok((version, build))
+}
+
+fn yaml_value(text: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix(&prefix) {
+            let v = rest.trim().trim_matches('"');
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn read_plist_versions(path: &Path) -> Result<(String, u64)> {
     let value = plist::Value::from_file(path)?;
     let dict = value
